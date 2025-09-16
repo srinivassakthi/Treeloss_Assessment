@@ -1,0 +1,195 @@
+// Define the centroid with corrected coordinates (-8.59263N, -75.54133E)
+var centroid = ee.Geometry.Point([-75.54133, -8.59263]);
+
+// Create a 25km buffer around the centroid
+var buffer = centroid.buffer(25000); // 25,000 meters = 25 km
+
+// Load the Hansen Global Forest Change dataset (2022 version)
+var hansen = ee.Image('UMD/hansen/global_forest_change_2022_v1_10');
+
+// Select the "lossyear" band (values 1-22 = 2001-2022)
+var lossYear = hansen.select(['lossyear']);
+
+// Clip the forest loss data to the buffer area
+var lossYearClipped = lossYear.clip(buffer);
+
+// Create a mask for forest loss between 2008-2022 (lossyear values 8-22)
+var loss2008to2022 = lossYearClipped.gte(8).and(lossYearClipped.lte(22));
+var lossYearMasked = lossYearClipped.updateMask(loss2008to2022);
+
+// Create visualization parameters for the study area buffer
+var bufferVis = {color: 'blue', fillColor: '00000000'};
+
+// Create a visualization palette for the loss year (2008-2022)
+var lossYearVis = {
+  min: 8,
+  max: 22,
+  palette: ['ffff00', 'ffcc00', 'ff9900', 'ff6600', 'ff3300', 'cc0000', '990000', '660000', '330000']
+};
+
+// Visualize the data
+Map.centerObject(buffer, 10);
+Map.addLayer(buffer, bufferVis, 'Study Area (25km buffer)');
+Map.addLayer(lossYearMasked, lossYearVis, 'Forest Loss (2008-2022)');
+
+// Add a title to the map
+var title = ui.Label('Deforestation Analysis (2008-2022)', {
+  fontWeight: 'bold',
+  fontSize: '16px',
+  position: 'top-center'
+});
+Map.add(title);
+
+// Add a legend
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    padding: '8px 15px'
+  }
+});
+
+var legendTitle = ui.Label('Year of Forest Loss', {fontWeight: 'bold'});
+legend.add(legendTitle);
+
+var makeRow = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+// Add color and labels to legend
+legend.add(makeRow('ffff00', '2008-2010'));
+legend.add(makeRow('ff9900', '2011-2013'));
+legend.add(makeRow('ff3300', '2014-2016'));
+legend.add(makeRow('990000', '2017-2019'));
+legend.add(makeRow('330000', '2020-2022'));
+
+Map.add(legend);
+
+// Calculate areas for analysis
+var areaImage = ee.Image.pixelArea().divide(10000); // Area in hectares
+
+// Calculate for 2021 (lossyear = 21)
+var loss2021 = lossYearClipped.eq(21);
+var area2021 = loss2021.multiply(areaImage);
+var totalArea2021 = area2021.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 30,
+  maxPixels: 1e9
+});
+
+// Calculate for 2021-2022 (lossyear = 21 or 22)
+var loss2021to2022 = lossYearClipped.gte(21).and(lossYearClipped.lte(22));
+var area2021to2022 = loss2021to2022.multiply(areaImage);
+var totalArea2021to2022 = area2021to2022.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 30,
+  maxPixels: 1e9
+});
+
+// Calculate for 2008-2022 (lossyear = 8 to 22)
+var loss2008to2022 = lossYearClipped.gte(8).and(lossYearClipped.lte(22));
+var area2008to2022 = loss2008to2022.multiply(areaImage);
+var totalArea2008to2022 = area2008to2022.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 30,
+  maxPixels: 1e9
+});
+
+// Calculate total buffer area
+var totalBufferArea = buffer.area().divide(10000); // Convert to hectares
+
+// Print results to console
+print('Study Area Total Size (hectares):', totalBufferArea);
+print('Deforestation in 2021 (hectares):', totalArea2021.get('lossyear'));
+print('Deforestation in 2021-2022 (hectares):', totalArea2021to2022.get('lossyear'));
+print('Total Deforestation 2008-2022 (hectares):', totalArea2008to2022.get('lossyear'));
+
+// Create a table to display the results
+var panel = ui.Panel({
+  style: {
+    position: 'top-right',
+    padding: '8px 15px',
+    width: '300px'
+  }
+});
+
+var panelTitle = ui.Label('Deforestation Analysis Results', {fontWeight: 'bold'});
+panel.add(panelTitle);
+
+// Function to add a row to the panel
+var addRow = function(label, value) {
+  panel.add(ui.Label(label + ': ' + value.toFixed(2) + ' hectares'));
+};
+
+// Use evaluate to get client-side access to the computed values
+totalBufferArea.evaluate(function(bufferArea) {
+  totalArea2021.evaluate(function(area2021) {
+    totalArea2021to2022.evaluate(function(area2021to2022) {
+      totalArea2008to2022.evaluate(function(area2008to2022) {
+        addRow('Study Area Size', bufferArea);
+        addRow('Deforestation in 2021', area2021.lossyear);
+        addRow('Deforestation in 2021-2022', area2021to2022.lossyear);
+        addRow('Total Deforestation 2008-2022', area2008to2022.lossyear);
+        
+        // Add percentages
+        var percent2021 = (area2021.lossyear / area2008to2022.lossyear * 100);
+        var percent2021to2022 = (area2021to2022.lossyear / area2008to2022.lossyear * 100);
+        
+        addRow('2021 as % of 2008-2022 total', percent2021);
+        addRow('2021-2022 as % of 2008-2022 total', percent2021to2022);
+      });
+    });
+  });
+});
+
+Map.add(panel);
+
+// Export results for further analysis
+Export.table.toDrive({
+  collection: ee.FeatureCollection([
+    ee.Feature(null, {
+      'study_area_ha': totalBufferArea,
+      'deforestation_2021_ha': totalArea2021.get('lossyear'),
+      'deforestation_2021_2022_ha': totalArea2021to2022.get('lossyear'),
+      'deforestation_2008_2022_ha': totalArea2008to2022.get('lossyear')
+    })
+  ]),
+  description: 'Deforestation_Analysis_Results',
+  fileFormat: 'CSV',
+  folder: 'GEE_Exports'
+});
+
+// Export the Hansen forest loss year data as a GeoTIFF
+Export.image.toDrive({
+  image: lossYearClipped,
+  description: 'Forest_Loss_Year_2008_2022',
+  scale: 30, // Hansen data is at 30m resolution
+  region: buffer,
+  fileFormat: 'GeoTIFF',
+  folder: 'GEE_Exports',
+  maxPixels: 1e9
+});
+
+// Export the study area buffer
+Export.table.toDrive({
+  collection: ee.FeatureCollection([ee.Feature(buffer)]),
+  description: 'Study_Area_25km_Buffer',
+  fileFormat: 'SHP',
+  folder: 'GEE_Exports'
+});
