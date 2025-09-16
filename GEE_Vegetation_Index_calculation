@@ -1,0 +1,239 @@
+// Define the centroid and create a 25km buffer
+var centroid = ee.Geometry.Point([-75.54133, -8.59263]);
+var buffer = centroid.buffer(25000); // 25,000 meters = 25 km
+
+// Load Sentinel-2 collection for 2023
+var sentinel = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(buffer)
+  .filterDate('2023-01-01', '2023-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20)); // Filter to less cloudy images
+
+// Calculate median values to create a cloud-free composite
+var composite = sentinel.median();
+
+// Clip to the study area
+var clippedComposite = composite.clip(buffer);
+
+// Define visualization parameters for false color composite (NIR, Red, Green)
+// This combination highlights vegetation in bright red
+var falseColorVis = {
+  bands: ['B8', 'B4', 'B3'],
+  min: 0,
+  max: 3000
+};
+
+// Calculate NDVI (Normalized Difference Vegetation Index)
+var ndvi = clippedComposite.normalizedDifference(['B8', 'B4']).rename('NDVI');
+
+// Visualization parameters for NDVI
+var ndviVis = {
+  min: -0.2,
+  max: 0.9,
+  palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718',
+    '74A901', '66A000', '529400', '3E8601', '207401', '056201',
+    '004C00', '023B01', '012E01', '011D01', '011301'
+  ]
+};
+
+// Add layers to the map
+Map.centerObject(buffer, 10);
+Map.addLayer(clippedComposite, falseColorVis, 'False Color Composite');
+Map.addLayer(ndvi, ndviVis, 'NDVI');
+Map.addLayer(buffer, {color: 'blue', fillColor: '00000000'}, 'Study Area Buffer');
+
+// Add a legend for the false color composite
+var falseLegend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+var falseLegendTitle = ui.Label('False Color Composite Legend', {fontWeight: 'bold'});
+falseLegend.add(falseLegendTitle);
+
+var makeFalseRow = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+falseLegend.add(makeFalseRow('red', 'Healthy Vegetation'));
+falseLegend.add(makeFalseRow('lightgreen', 'Sparse Vegetation'));
+falseLegend.add(makeFalseRow('cyan', 'Water'));
+falseLegend.add(makeFalseRow('brown', 'Urban/Bare Soil'));
+Map.add(falseLegend);
+
+// Add a legend for NDVI
+var ndviLegend = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    padding: '8px 15px'
+  }
+});
+
+var ndviLegendTitle = ui.Label('NDVI Legend', {fontWeight: 'bold'});
+ndviLegend.add(ndviLegendTitle);
+
+var makeNDVIRow = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+ndviLegend.add(makeNDVIRow('darkgreen', 'High NDVI (0.7-0.9): Dense vegetation'));
+ndviLegend.add(makeNDVIRow('lightgreen', 'Medium NDVI (0.4-0.7): Moderate vegetation'));
+ndviLegend.add(makeNDVIRow('yellow', 'Low NDVI (0.2-0.4): Sparse vegetation'));
+ndviLegend.add(makeNDVIRow('brown', 'Very Low NDVI (0-0.2): Bare soil/urban'));
+ndviLegend.add(makeNDVIRow('blue', 'Negative NDVI: Water'));
+Map.add(ndviLegend);
+
+// Add title
+var title = ui.Label('Vegetation Analysis 2023 - Sentinel-2 Imagery', {
+  fontWeight: 'bold',
+  fontSize: '16px',
+  position: 'top-center'
+});
+Map.add(title);
+
+// Calculate area statistics for different NDVI ranges
+var areaImage = ee.Image.pixelArea().divide(10000); // Area in hectares
+
+// Define NDVI classes
+var water = ndvi.lt(0).rename('water');
+var bareSoil = ndvi.gte(0).and(ndvi.lt(0.2)).rename('bareSoil');
+var sparseVeg = ndvi.gte(0.2).and(ndvi.lt(0.4)).rename('sparseVeg');
+var moderateVeg = ndvi.gte(0.4).and(ndvi.lt(0.7)).rename('moderateVeg');
+var denseVeg = ndvi.gte(0.7).rename('denseVeg');
+
+// Calculate areas
+var waterArea = water.multiply(areaImage).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 20,
+  maxPixels: 1e9
+});
+
+var bareSoilArea = bareSoil.multiply(areaImage).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 20,
+  maxPixels: 1e9
+});
+
+var sparseVegArea = sparseVeg.multiply(areaImage).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 20,
+  maxPixels: 1e9
+});
+
+var moderateVegArea = moderateVeg.multiply(areaImage).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 20,
+  maxPixels: 1e9
+});
+
+var denseVegArea = denseVeg.multiply(areaImage).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: buffer,
+  scale: 20,
+  maxPixels: 1e9
+});
+
+// Print area statistics
+print('Water area (hectares):', waterArea.get('water'));
+print('Bare soil/urban area (hectares):', bareSoilArea.get('bareSoil'));
+print('Sparse vegetation area (hectares):', sparseVegArea.get('sparseVeg'));
+print('Moderate vegetation area (hectares):', moderateVegArea.get('moderateVeg'));
+print('Dense vegetation area (hectares):', denseVegArea.get('denseVeg'));
+
+// Export the false color composite
+Export.image.toDrive({
+  image: clippedComposite.select(['B8', 'B4', 'B3']),
+  description: 'False_Color_Composite_2023',
+  scale: 20,
+  region: buffer,
+  fileFormat: 'GeoTIFF',
+  folder: 'GEE_Exports',
+  maxPixels: 1e9
+});
+
+// Export the NDVI image
+Export.image.toDrive({
+  image: ndvi,
+  description: 'NDVI_2023',
+  scale: 20,
+  region: buffer,
+  fileFormat: 'GeoTIFF',
+  folder: 'GEE_Exports',
+  maxPixels: 1e9
+});
+
+// Export the study area buffer
+Export.table.toDrive({
+  collection: ee.FeatureCollection([ee.Feature(buffer)]),
+  description: 'Study_Area_25km_Buffer',
+  fileFormat: 'SHP',
+  folder: 'GEE_Exports'
+});
+
+// Export vegetation classification for easier QGIS mapping
+var vegClassification = water.multiply(1)
+  .add(bareSoil.multiply(2))
+  .add(sparseVeg.multiply(3))
+  .add(moderateVeg.multiply(4))
+  .add(denseVeg.multiply(5))
+  .rename('vegetation_class');
+
+Export.image.toDrive({
+  image: vegClassification,
+  description: 'Vegetation_Classification_2023',
+  scale: 20,
+  region: buffer,
+  fileFormat: 'GeoTIFF',
+  folder: 'GEE_Exports',
+  maxPixels: 1e9
+});
+
+// Export statistics as CSV
+Export.table.toDrive({
+  collection: ee.FeatureCollection([
+    ee.Feature(null, {
+      'water_ha': waterArea.get('water'),
+      'bare_soil_ha': bareSoilArea.get('bareSoil'),
+      'sparse_veg_ha': sparseVegArea.get('sparseVeg'),
+      'moderate_veg_ha': moderateVegArea.get('moderateVeg'),
+      'dense_veg_ha': denseVegArea.get('denseVeg')
+    })
+  ]),
+  description: 'Vegetation_Statistics',
+  fileFormat: 'CSV',
+  folder: 'GEE_Exports'
+});
